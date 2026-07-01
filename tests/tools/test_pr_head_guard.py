@@ -213,6 +213,120 @@ def test_missing_live_pr_head_evidence_blocks_review_thread_resolution(tmp_path)
     clear_runtime_evidence()
 
 
+def test_missing_ci_evidence_blocks_pr_ci_diagnosis(tmp_path):
+    repo, head_sha = _init_repo(tmp_path, "feat/runtime-guardrails")
+    clear_runtime_evidence()
+
+    with patch(
+        "agent.pr_head_guard.subprocess.run",
+        side_effect=_mock_gh_pr_view(17, "feat/runtime-guardrails", head_sha, "org/repo"),
+    ):
+        result = check_all_command_guards(
+            "gh pr checks 17",
+            "local",
+            repo_root=str(repo),
+        )
+
+    assert result["approved"] is False
+    assert "missing CI evidence" in result["message"]
+    clear_runtime_evidence()
+
+
+def test_stale_ci_sha_blocks_diagnosis(tmp_path):
+    repo, head_sha = _init_repo(tmp_path, "feat/runtime-guardrails")
+    clear_runtime_evidence()
+    seed_turn_runtime_evidence(
+        ci_evidence_fetched_for_live_pr_head=True,
+        ci_run_id="987654321",
+        ci_checkout_sha=f"{head_sha[:-1]}0",
+        ci_status="completed",
+        ci_conclusion="failure",
+        failing_file="src/app.py",
+        failing_blob_sha="deadbeef",
+        failing_line=17,
+    )
+
+    with patch(
+        "agent.pr_head_guard.subprocess.run",
+        side_effect=_mock_gh_pr_view(17, "feat/runtime-guardrails", head_sha, "org/repo"),
+    ):
+        result = check_all_command_guards(
+            "gh pr checks 17",
+            "local",
+            repo_root=str(repo),
+        )
+
+    assert result["approved"] is False
+    assert "CI checkout/head SHA does not match" in result["message"]
+    clear_runtime_evidence()
+
+
+def test_stale_ci_sha_blocks_rerun(tmp_path):
+    repo, head_sha = _init_repo(tmp_path, "feat/runtime-guardrails")
+    clear_runtime_evidence()
+    seed_turn_runtime_evidence(
+        ci_evidence_fetched_for_live_pr_head=True,
+        ci_run_id="987654321",
+        ci_checkout_sha=f"{head_sha[:-1]}0",
+        ci_status="completed",
+        ci_conclusion="failure",
+        failing_file="src/app.py",
+        failing_blob_sha="deadbeef",
+        failing_line=17,
+    )
+
+    with patch(
+        "agent.pr_head_guard.subprocess.run",
+        side_effect=_mock_gh_pr_view(17, "feat/runtime-guardrails", head_sha, "org/repo"),
+    ):
+        result = check_all_command_guards(
+            "gh run rerun 987654321",
+            "local",
+            repo_root=str(repo),
+        )
+
+    assert result["approved"] is False
+    assert "CI checkout/head SHA does not match" in result["message"]
+    clear_runtime_evidence()
+
+
+def test_matching_live_pr_head_and_ci_sha_allows_diagnosis_and_rerun(tmp_path):
+    repo, head_sha = _init_repo(tmp_path, "feat/runtime-guardrails")
+    clear_runtime_evidence()
+    seed_turn_runtime_evidence(
+        ci_evidence_fetched_for_live_pr_head=True,
+        ci_run_id="987654321",
+        ci_checkout_sha=head_sha,
+        ci_status="completed",
+        ci_conclusion="failure",
+        failing_file="src/app.py",
+        failing_blob_sha="deadbeef",
+        failing_line=17,
+    )
+
+    with patch(
+        "agent.pr_head_guard.subprocess.run",
+        side_effect=_mock_gh_pr_view(17, "feat/runtime-guardrails", head_sha, "org/repo"),
+    ):
+        diagnosis = check_all_command_guards(
+            "gh pr checks 17",
+            "local",
+            repo_root=str(repo),
+        )
+        rerun = check_all_command_guards(
+            "gh run rerun 987654321",
+            "local",
+            repo_root=str(repo),
+        )
+
+    assert diagnosis["approved"] is True
+    assert rerun["approved"] is True
+    evidence = current_runtime_evidence()
+    assert evidence is not None
+    assert evidence["ci_evidence_ci_sha_matches_live_pr_head"] is True
+    clear_runtime_evidence()
+
+
 def test_local_only_fix_blocks_review_thread_resolution(tmp_path):
     repo, head_sha = _init_repo(tmp_path, "feat/runtime-guardrails")
     clear_runtime_evidence()

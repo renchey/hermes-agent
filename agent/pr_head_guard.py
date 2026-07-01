@@ -128,6 +128,12 @@ def enforce_pr_head_invariant(
                 "unavailable. Review-thread resolution requires verified live PR-head "
                 "evidence before resolving it."
             )
+        if risk_label == "CI diagnosis":
+            return (
+                "Blocked CI diagnosis: verified live PR-head evidence is unavailable. "
+                "CI diagnosis requires verified live PR-head evidence plus CI evidence "
+                "for the current live PR head."
+            )
         return None
     if evidence.get("pr_head_verified"):
         if command is not None:
@@ -140,6 +146,14 @@ def enforce_pr_head_invariant(
                 )
                 if review_thread_block is not None:
                     return review_thread_block
+            if risk_label == "CI diagnosis":
+                ci_block = enforce_stale_ci_evidence_gate(
+                    repo_root=repo_root,
+                    evidence=evidence,
+                    command=command,
+                )
+                if ci_block is not None:
+                    return ci_block
         return None
     return _block_message(action_label=risk_label or action_label, evidence=evidence)
 
@@ -207,6 +221,94 @@ def enforce_review_thread_resolution_gate(
     return None
 
 
+def enforce_stale_ci_evidence_gate(
+    *,
+    repo_root: Path | None,
+    evidence: dict[str, Any] | None = None,
+    command: str | None = None,
+) -> str | None:
+    """Block PR CI diagnosis/reruns unless CI evidence matches live PR state."""
+    if repo_root is None:
+        return None
+    if command is not None:
+        should_check, risk_label = command_requires_pr_head_guard(command)
+        if not should_check or risk_label != "CI diagnosis":
+            return None
+    evidence = dict(evidence or update_runtime_evidence() or {})
+
+    if not evidence.get("pr_head_verified"):
+        return _block_message(action_label="CI diagnosis", evidence=evidence)
+
+    live_pr_head_sha = str(evidence.get("live_pr_head_sha") or "").strip()
+    ci_checkout_sha = _resolve_ci_checkout_sha(evidence)
+    ci_run_id = str(evidence.get("ci_run_id") or evidence.get("ci_check_run_id") or "").strip()
+    ci_status = str(evidence.get("ci_status") or "").strip()
+    ci_conclusion = str(evidence.get("ci_conclusion") or "").strip()
+    failing_file = str(evidence.get("failing_file") or "").strip()
+    failing_blob_sha = str(evidence.get("failing_blob_sha") or "").strip()
+    failing_line = _coerce_int(evidence.get("failing_line"))
+    ci_fetched = bool(evidence.get("ci_evidence_fetched_for_live_pr_head"))
+
+    missing = []
+    if not ci_fetched:
+        missing.append("fetched CI evidence for the current live PR head")
+    if not live_pr_head_sha:
+        missing.append("live PR head SHA")
+    if not ci_checkout_sha:
+        missing.append("CI checkout/head SHA")
+    if not ci_status:
+        missing.append("CI status")
+    if not ci_conclusion:
+        missing.append("CI conclusion")
+    if not failing_file:
+        missing.append("failing file")
+    if not failing_blob_sha:
+        missing.append("failing blob SHA")
+    if failing_line is None:
+        missing.append("failing line")
+    if missing:
+        update_runtime_evidence(
+            ci_run_id=ci_run_id or None,
+            ci_checkout_sha=ci_checkout_sha or None,
+            ci_status=ci_status or None,
+            ci_conclusion=ci_conclusion or None,
+            ci_evidence_fetched_for_live_pr_head=ci_fetched,
+        )
+        return (
+            "Blocked CI diagnosis: missing CI evidence for the current live PR head "
+            f"({', '.join(missing)}). Gather CI evidence for the verified live PR head "
+            "before diagnosing or rerunning stale CI."
+        )
+
+    ci_sha_matches_live = ci_checkout_sha == live_pr_head_sha
+    update_runtime_evidence(
+        ci_run_id=ci_run_id or None,
+        ci_checkout_sha=ci_checkout_sha,
+        ci_status=ci_status,
+        ci_conclusion=ci_conclusion,
+        ci_evidence_fetched_for_live_pr_head=True,
+        ci_evidence_live_pr_head_sha=live_pr_head_sha,
+        ci_evidence_local_head_sha=str(evidence.get("local_head_sha") or "").strip() or None,
+        ci_evidence_ci_sha_matches_live_pr_head=ci_sha_matches_live,
+        ci_stale_ci_verified=ci_sha_matches_live is False,
+    )
+    if not ci_sha_matches_live:
+        return (
+            "Blocked CI diagnosis: CI checkout/head SHA does not match the verified "
+            "live PR head SHA.\n"
+            f"PR: #{evidence.get('pr_number')} {evidence.get('pr_repository') or 'unknown-repo'}\n"
+            f"CI run: {ci_run_id or 'unknown'}\n"
+            f"CI status: {ci_status or 'unknown'}\n"
+            f"CI conclusion: {ci_conclusion or 'unknown'}\n"
+            f"CI checkout/head SHA: {ci_checkout_sha}\n"
+            f"Live PR head SHA: {live_pr_head_sha}\n"
+            f"Local HEAD: {str(evidence.get('local_head_sha') or 'unknown')}\n"
+            "Repair the checkout/ref alignment and refresh CI evidence before diagnosing "
+            "or rerunning CI."
+        )
+    return None
+
+
 def _block_message(*, action_label: str, evidence: dict[str, Any]) -> str:
     pr_number = evidence.get("pr_number")
     pr_repository = evidence.get("pr_repository") or "unknown-repo"
@@ -240,6 +342,14 @@ def _resolve_review_thread_comment_id(
         if match:
             return match.group(1)
     return None
+
+
+def _resolve_ci_checkout_sha(evidence: dict[str, Any]) -> str:
+    for key in ("ci_checkout_sha", "ci_head_sha", "ci_run_head_sha", "ci_head_ref_sha"):
+        value = str(evidence.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _coerce_int(value: Any) -> int | None:
