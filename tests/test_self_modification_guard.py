@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -91,6 +92,51 @@ class TestSelfModificationGuard:
             )
         assert "error" in result
         assert "pre-edit git status" in result["error"].lower()
+
+    def test_protected_write_uses_target_repo_root_instead_of_cwd(self, tmp_path, monkeypatch):
+        cwd_repo = tmp_path / "cwd-repo"
+        target_repo = tmp_path / "target-repo"
+        nested_target = target_repo / "skills" / "productivity" / "notion" / "SKILL.md"
+
+        for repo, marker_name in ((cwd_repo, "cwd-only.txt"), (target_repo, "target-only.txt")):
+            repo.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / marker_name).write_text("marker\n", encoding="utf-8")
+
+        (cwd_repo / "cwd-only.txt").write_text("marker\n", encoding="utf-8")
+        (target_repo / "target-only.txt").write_text("marker\n", encoding="utf-8")
+        nested_target.parent.mkdir(parents=True, exist_ok=True)
+        nested_target.write_text("patched\n", encoding="utf-8")
+        monkeypatch.chdir(cwd_repo)
+
+        def _dispatch(*_args, **_kwargs):
+            evidence = current_runtime_evidence()
+            assert evidence is not None
+            assert evidence["audit_repo_root"] == str(target_repo)
+            assert "target-only.txt" in evidence["pre_edit_git_status"]
+            assert "cwd-only.txt" not in evidence["pre_edit_git_status"]
+            return '{"success": true, "message": "updated", "path": "SKILL.md"}'
+
+        with patch("hermes_cli.plugins.has_hook", return_value=False), patch(
+            "model_tools.registry.dispatch",
+            side_effect=_dispatch,
+        ):
+            result = json.loads(
+                handle_function_call(
+                    "write_file",
+                    {"path": str(nested_target), "content": "patched"},
+                    task_id="task-root-resolution",
+                    user_task=f"Explicit self-improvement request: edit the target file {nested_target} and validate it.",
+                    skip_pre_tool_call_hook=True,
+                    skip_tool_request_middleware=True,
+                )
+            )
+
+        report = result["self_modification_report"]
+        assert "target-only.txt" in report["pre_edit_git_status"]
+        assert "cwd-only.txt" not in report["pre_edit_git_status"]
+        assert "target-only.txt" in report["final_git_status"]
+        assert report["files_changed"] == [str(nested_target)]
 
     def test_runtime_evidence_is_shared_across_nested_calls(self):
         clear_runtime_evidence()

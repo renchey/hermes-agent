@@ -81,9 +81,9 @@ def before_tool_call(function_name: str, function_args: Mapping[str, Any] | None
             return None
         if not _is_explicit_self_mod_request(user_task_text, protected_targets):
             return _blocked_message(function_name, protected_targets)
-        repo_root = _workspace_root()
+        repo_root, repo_root_error = _resolve_audit_repo_root(protected_targets)
         if repo_root is None:
-            return _blocked_message(function_name, protected_targets, "pre-edit git status --short could not be captured")
+            return _blocked_message(function_name, protected_targets, repo_root_error or "pre-edit git status --short could not be captured")
         pre_edit_git_status = _capture_git_status(repo_root)
         if pre_edit_git_status is None:
             return _blocked_message(function_name, protected_targets, "pre-edit git status --short could not be captured")
@@ -94,7 +94,11 @@ def before_tool_call(function_name: str, function_args: Mapping[str, Any] | None
             "pre_edit_git_status": pre_edit_git_status,
             "explicit_user_request": user_task_text,
         })
-        update_runtime_evidence(latest_user_request=user_task_text or None, pre_edit_git_status=pre_edit_git_status)
+        update_runtime_evidence(
+            latest_user_request=user_task_text or None,
+            audit_repo_root=str(repo_root),
+            pre_edit_git_status=pre_edit_git_status,
+        )
         return None
 
     if function_name in _TERMINAL_TOOL_NAMES:
@@ -106,9 +110,9 @@ def before_tool_call(function_name: str, function_args: Mapping[str, Any] | None
             return None
         if not _is_explicit_self_mod_request(user_task_text, protected_targets):
             return _blocked_message(function_name, protected_targets)
-        repo_root = _workspace_root()
+        repo_root, repo_root_error = _resolve_audit_repo_root(protected_targets)
         if repo_root is None:
-            return _blocked_message(function_name, protected_targets, "pre-edit git status --short could not be captured")
+            return _blocked_message(function_name, protected_targets, repo_root_error or "pre-edit git status --short could not be captured")
         pre_edit_git_status = _capture_git_status(repo_root)
         if pre_edit_git_status is None:
             return _blocked_message(function_name, protected_targets, "pre-edit git status --short could not be captured")
@@ -119,7 +123,11 @@ def before_tool_call(function_name: str, function_args: Mapping[str, Any] | None
             "pre_edit_git_status": pre_edit_git_status,
             "explicit_user_request": user_task_text,
         })
-        update_runtime_evidence(latest_user_request=user_task_text or None, pre_edit_git_status=pre_edit_git_status)
+        update_runtime_evidence(
+            latest_user_request=user_task_text or None,
+            audit_repo_root=str(repo_root),
+            pre_edit_git_status=pre_edit_git_status,
+        )
         return None
 
     if function_name in _EXECUTE_CODE_TOOL_NAMES:
@@ -131,9 +139,9 @@ def before_tool_call(function_name: str, function_args: Mapping[str, Any] | None
             return None
         if not _is_explicit_self_mod_request(user_task_text, protected_targets):
             return _blocked_message(function_name, protected_targets)
-        repo_root = _workspace_root()
+        repo_root, repo_root_error = _resolve_audit_repo_root(protected_targets)
         if repo_root is None:
-            return _blocked_message(function_name, protected_targets, "pre-edit git status --short could not be captured")
+            return _blocked_message(function_name, protected_targets, repo_root_error or "pre-edit git status --short could not be captured")
         pre_edit_git_status = _capture_git_status(repo_root)
         if pre_edit_git_status is None:
             return _blocked_message(function_name, protected_targets, "pre-edit git status --short could not be captured")
@@ -144,7 +152,11 @@ def before_tool_call(function_name: str, function_args: Mapping[str, Any] | None
             "pre_edit_git_status": pre_edit_git_status,
             "explicit_user_request": user_task_text,
         })
-        update_runtime_evidence(latest_user_request=user_task_text or None, pre_edit_git_status=pre_edit_git_status)
+        update_runtime_evidence(
+            latest_user_request=user_task_text or None,
+            audit_repo_root=str(repo_root),
+            pre_edit_git_status=pre_edit_git_status,
+        )
         return None
 
     return None
@@ -233,6 +245,49 @@ def _capture_git_status(repo_root: Path | None) -> str | None:
     if completed.returncode != 0:
         return None
     return completed.stdout.rstrip("\n")
+
+
+def _resolve_audit_repo_root(protected_targets: Sequence[str]) -> tuple[Path | None, str | None]:
+    """Resolve the Git root that owns the protected target path(s).
+
+    If the targets span multiple repositories, block rather than guessing.
+    """
+    roots: list[Path] = []
+    for target in protected_targets:
+        root = _nearest_git_root_for_target(target)
+        if root is not None and root not in roots:
+            roots.append(root)
+
+    if len(roots) > 1:
+        root_text = ", ".join(str(root) for root in roots)
+        return None, f"protected targets span multiple git roots: {root_text}"
+
+    if len(roots) == 1:
+        return roots[0], None
+
+    fallback = _workspace_root()
+    if fallback is not None:
+        return fallback, None
+
+    return None, "pre-edit git status --short could not be captured"
+
+
+def _nearest_git_root_for_target(target_text: str) -> Path | None:
+    """Return the nearest Git repository root for a protected target path."""
+    text = str(target_text or "").strip()
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    try:
+        resolved = path.resolve(strict=False)
+    except Exception:
+        resolved = path
+    for candidate in [resolved, *resolved.parents]:
+        if (candidate / ".git").exists():
+            return candidate
+    return None
 
 
 def _capture_git_diff_summary(repo_root: Path | None) -> str:
