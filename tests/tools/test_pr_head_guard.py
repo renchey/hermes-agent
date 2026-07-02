@@ -185,6 +185,23 @@ def test_explicit_pr_target_is_used_for_live_head_evidence(tmp_path):
     clear_runtime_evidence()
 
 
+def test_explicit_pr_target_blocks_when_live_head_evidence_is_missing(tmp_path):
+    repo, _ = _init_repo(tmp_path, "feat/runtime-guardrails")
+    clear_runtime_evidence()
+
+    with patch("agent.pr_head_guard.subprocess.run", side_effect=_mock_gh_pr_view_failure()):
+        result = check_all_command_guards(
+            "gh pr merge 17 --squash",
+            "local",
+            repo_root=str(repo),
+        )
+
+    assert result["approved"] is False
+    assert "PR mutation" in result["message"]
+    assert "verified live PR-head evidence is unavailable" in result["message"]
+    clear_runtime_evidence()
+
+
 def test_mismatched_local_head_blocks_pr_mutation(tmp_path, monkeypatch):
     repo, head_sha = _init_repo(tmp_path, "feat/runtime-guardrails")
     monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)

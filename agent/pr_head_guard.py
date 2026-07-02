@@ -151,6 +151,11 @@ def enforce_pr_head_invariant(
 
     evidence = collect_pr_head_evidence(repo_root, command=command)
     if not evidence:
+        if risk_label == "PR mutation":
+            return (
+                "Blocked PR mutation: verified live PR-head evidence is unavailable. "
+                "PR mutations require verified live PR-head evidence before proceeding."
+            )
         if risk_label == "review-thread resolution":
             return (
                 "Blocked review-thread resolution: verified live PR-head evidence is "
