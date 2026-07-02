@@ -1138,6 +1138,7 @@ def handle_function_call(
 
         notion_health_block = require_fresh_notion_healthcheck(
             action_label=function_name,
+            function_args=function_args,
             user_task=_user_task,
         )
         if notion_health_block is not None:

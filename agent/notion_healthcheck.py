@@ -160,10 +160,11 @@ def require_fresh_notion_healthcheck(
     action_label: str,
     user_task: str | None = None,
     evidence: Mapping[str, Any] | None = None,
+    function_args: Mapping[str, Any] | None = None,
     now: float | None = None,
 ) -> str | None:
     """Block Notion-dependent actions unless a fresh, successful check exists."""
-    if not _looks_notion_dependent(action_label, user_task, evidence):
+    if not _looks_notion_dependent(action_label, user_task, evidence, function_args):
         return None
 
     evidence_map = dict(evidence or current_runtime_evidence() or {})
@@ -220,12 +221,15 @@ def _looks_notion_dependent(
     action_label: str,
     user_task: str | None,
     evidence: Mapping[str, Any] | None,
+    function_args: Mapping[str, Any] | None = None,
 ) -> bool:
     text_blobs = [
         action_label,
         user_task or "",
         str((evidence or {}).get("latest_user_request") or ""),
         str((evidence or {}).get("active_user_task") or ""),
+        str((function_args or {}).get("command") or (function_args or {}).get("cmd") or ""),
+        str((function_args or {}).get("code") or ""),
     ]
     normalized = " ".join(normalize_notion_text(blob) for blob in text_blobs if blob)
     if "notion" not in normalized:

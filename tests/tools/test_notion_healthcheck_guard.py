@@ -4,7 +4,24 @@ from __future__ import annotations
 
 from agent.runtime_evidence import clear_runtime_evidence, current_runtime_evidence, seed_turn_runtime_evidence
 from agent import notion_healthcheck as notion_guard
+import urllib.error
 
+
+
+
+def test_detector_uses_terminal_command_text_narrowly():
+    assert notion_guard._looks_notion_dependent(
+        "terminal",
+        "Continue PR work.",
+        {},
+        {"command": "Run Notion healthcheck now"},
+    ) is True
+    assert notion_guard._looks_notion_dependent(
+        "terminal",
+        "Continue PR work.",
+        {},
+        {"command": "echo hello"},
+    ) is False
 
 def test_missing_notion_route_tool_blocks_notion_dependent_action(monkeypatch):
     clear_runtime_evidence()
@@ -21,6 +38,43 @@ def test_missing_notion_route_tool_blocks_notion_dependent_action(monkeypatch):
     assert "NOTION_API_KEY" in block
     clear_runtime_evidence()
 
+
+
+
+def test_missing_route_tool_with_token_blocks(monkeypatch):
+    clear_runtime_evidence()
+    monkeypatch.setattr(
+        notion_guard,
+        "get_env_value",
+        lambda key: "notion-token" if key == "NOTION_API_KEY" else None,
+    )
+
+    def _missing_route(url: str, token: str):
+        raise notion_guard.NotionRouteUnavailableError("Notion route/tool unavailable")
+
+    result = notion_guard.probe_notion_healthcheck(fetcher=_missing_route, now=42.0)
+    assert result["ok"] is False
+    assert result["reason"] == "missing_tool"
+    assert "unavailable" in result["message"].lower()
+    clear_runtime_evidence()
+
+
+def test_missing_route_tool_urLError_blocks(monkeypatch):
+    clear_runtime_evidence()
+    monkeypatch.setattr(
+        notion_guard,
+        "get_env_value",
+        lambda key: "notion-token" if key == "NOTION_API_KEY" else None,
+    )
+
+    def _missing_route(url: str, token: str):
+        raise urllib.error.URLError("connection refused")
+
+    result = notion_guard.probe_notion_healthcheck(fetcher=_missing_route, now=43.0)
+    assert result["ok"] is False
+    assert result["reason"] == "missing_tool"
+    assert "unavailable" in result["message"].lower() or "connection" in result["message"].lower()
+    clear_runtime_evidence()
 
 def test_unauthenticated_config_failure_blocks(monkeypatch):
     clear_runtime_evidence()

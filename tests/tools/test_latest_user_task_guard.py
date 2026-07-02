@@ -69,6 +69,24 @@ def test_matching_latest_user_request_is_allowed(monkeypatch):
     clear_runtime_evidence()
 
 
+
+
+def test_task_sensitive_command_is_allowed_when_latest_request_matches_after_compaction():
+    clear_runtime_evidence()
+    seed_turn_runtime_evidence(
+        latest_user_request="Check Notion only.",
+        compaction_summary_active=True,
+    )
+
+    block = model_tools.enforce_latest_user_request_authority(
+        function_name="terminal",
+        function_args={"command": "gh pr checks 17"},
+        user_task="Check Notion only.",
+    )
+
+    assert block is None
+    clear_runtime_evidence()
+
 def test_tool_dispatch_keeps_latest_user_request_evidence_current(monkeypatch):
     clear_runtime_evidence()
     seed_turn_runtime_evidence()
